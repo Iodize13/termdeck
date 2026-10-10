@@ -1,0 +1,8 @@
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/base.apk
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/split_chrome.apk
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/split_config.en.apk
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/split_config.ja.apk
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/split_config.th.apk
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/split_dev_ui.apk
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/split_on_demand.apk
+package:/data/app/~~iZZwvysNuQud8XXnmtIssg==/com.android.chrome-gG0oDLUEKGxXS36GSXZcGg==/split_stack_unwinder.apk
