@@ -1,5 +1,5 @@
 use crate::index::{BuildStats, IndexEvent, build_index, spawn_refresh};
-use crate::parse::{LaunchResult, classify_launch};
+use crate::parse::{LaunchResult, classify_launch, socket_unavailable};
 use crate::run::run_capture;
 use crate::store::{AppEntry, Paths, State, read_json, write_atomic};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
@@ -188,13 +188,24 @@ impl App {
     pub fn launch(&mut self, pkg: &str) {
         let Some(entry) = self.find(pkg).cloned() else { return };
         let t = Instant::now();
-        let result = match run_capture("termux-am", &["start", "-n", &entry.activity]) {
-            Ok(out) => {
-                let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-                text.push_str(&String::from_utf8_lossy(&out.stderr));
-                classify_launch(&text)
-            }
-            Err(e) => LaunchResult::Failed(format!("termux-am: {e}")),
+        let start = |program: &str| {
+            run_capture(program, &["start", "-n", &entry.activity])
+                .map(|out| {
+                    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+                    text.push_str(&String::from_utf8_lossy(&out.stderr));
+                    text
+                })
+                .map_err(|e| format!("{program}: {e}"))
+        };
+        // termux-am needs termux-app's socket server; fall back to the slower
+        // `am` (dalvik) when the server isn't running or termux-am is missing.
+        let text = match start("termux-am") {
+            Ok(t) if !socket_unavailable(&t) => Ok(t),
+            _ => start("am"),
+        };
+        let result = match text {
+            Ok(t) => classify_launch(&t),
+            Err(e) => LaunchResult::Failed(e),
         };
         let ms = t.elapsed().as_millis();
         match result {

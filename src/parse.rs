@@ -52,6 +52,11 @@ pub enum LaunchResult {
     Failed(String),
 }
 
+/// `termux-am` can't reach termux-app's am socket server (not running / disabled).
+pub fn socket_unavailable(out: &str) -> bool {
+    out.contains("Could not connect to socket") || out.contains("TermuxAm server is not enabled")
+}
+
 /// Classify `termux-am start` output (its exit code is always 0).
 pub fn classify_launch(out: &str) -> LaunchResult {
     if out.contains("Display over other apps") {
@@ -121,6 +126,8 @@ mod tests {
         assert_eq!(classify_launch(&fx("am-first.txt")), LaunchResult::Success);
         assert_eq!(classify_launch(&fx("am-front.synthetic.txt")), LaunchResult::BroughtToFront);
         assert_eq!(classify_launch(&fx("am-overlay.synthetic.txt")), LaunchResult::NeedsOverlayPermission);
+        assert!(socket_unavailable("Could not connect to socket: No such file or directory\n"));
+        assert!(!socket_unavailable(&fx("am-first.txt")));
         assert!(matches!(classify_launch(&fx("am-missing.txt")), LaunchResult::Failed(m) if m.contains("does not exist")));
         assert!(matches!(classify_launch(""), LaunchResult::Failed(_)));
     }
