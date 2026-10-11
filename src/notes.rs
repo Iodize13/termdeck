@@ -1,11 +1,9 @@
-//! Quick notes: one line per note appended to a markdown file (meant to be synced, e.g. by
-//! Syncthing, and only ever written from the phone).
+//! Quick notes: one line per note appended to a markdown file. By default it lives in termdeck's
+//! private data dir; point `notes_path` at shared storage to sync it (e.g. with Syncthing).
 
 use crate::run::run_stdout;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-
-pub const DEFAULT_PATH: &str = "~/storage/shared/Notes/mobile.md";
 
 /// `~/x` → `$HOME/x`.
 pub fn expand(path: &str) -> PathBuf {
@@ -20,16 +18,23 @@ fn now() -> String {
     run_stdout("date", &["+%Y-%m-%d %H:%M"]).map(|s| s.trim().to_string()).unwrap_or_default()
 }
 
-/// Append `- <time> <text>` to `path`. Newlines in `text` become spaces so each note stays one line.
-/// Only the file's own directory may be created: building a whole missing chain would turn
-/// `~/storage` into a plain directory before `termux-setup-storage` has linked it.
+/// Append `- <time> <text>` to `path`, creating its directories. Newlines in `text` become spaces so
+/// each note stays one line.
 pub fn append(path: &Path, text: &str) -> std::io::Result<()> {
     append_at(path, text, &now())
 }
 
 fn append_at(path: &Path, text: &str, time: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
-        std::fs::create_dir(dir)?;
+        // Creating ~/storage here would make it a plain directory that termux-setup-storage
+        // then can't link, so require that step instead.
+        if let Some(home) = std::env::var_os("HOME") {
+            let storage = Path::new(&home).join("storage");
+            if dir.starts_with(&storage) && !storage.exists() {
+                return Err(std::io::Error::new(ErrorKind::NotFound, "~/storage missing: run termux-setup-storage"));
+            }
+        }
+        std::fs::create_dir_all(dir)?;
     }
     let line = format_line(time, text) + "\n";
     std::fs::OpenOptions::new().create(true).append(true).open(path)?.write_all(line.as_bytes())
@@ -119,13 +124,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("termdeck-notes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("sub").join("mobile.md");
+        let path = dir.join("a").join("b").join("mobile.md");
         append_at(&path, "buy  milk\nand eggs", "2026-10-11 17:30").unwrap();
         append_at(&path, "call mom", "").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "- 2026-10-11 17:30 buy milk and eggs\n- call mom\n");
-        // Two missing levels: refuse rather than invent the chain.
-        assert!(append_at(&dir.join("a").join("b").join("n.md"), "x", "").is_err());
-        assert!(!dir.join("a").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

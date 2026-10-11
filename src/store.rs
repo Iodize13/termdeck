@@ -54,7 +54,7 @@ pub struct Config {
     pub list_shape: ButtonShape,
     /// Show Nerd Font app icons.
     pub icons: bool,
-    /// Where notes are appended; `~/` is expanded.
+    /// Where notes are appended; `~/` is expanded. Empty: `notes.md` in termdeck's data dir.
     pub notes_path: String,
 }
 
@@ -67,7 +67,7 @@ impl Default for Config {
             pinned_shape: ButtonShape::Parallelogram,
             list_shape: ButtonShape::Parallelogram,
             icons: true,
-            notes_path: crate::notes::DEFAULT_PATH.to_string(),
+            notes_path: String::new(),
         }
     }
 }
@@ -79,6 +79,8 @@ pub struct Paths {
     /// Optional ASCII art shown on the Home page.
     pub art: PathBuf,
     pub config: PathBuf,
+    /// Default notes file (private; no storage permission needed).
+    pub notes: PathBuf,
     /// Termux's color scheme, read to pick readable text on filled rows.
     pub termux_colors: Option<PathBuf>,
 }
@@ -107,6 +109,7 @@ impl Paths {
             state: data.join("termdeck").join("state.json"),
             art: config.join("termdeck").join("art.txt"),
             config: config.join("termdeck").join("config.json"),
+            notes: data.join("termdeck").join("notes.md"),
             termux_colors: None,
         }
     }

@@ -170,7 +170,10 @@ impl App {
     }
 
     fn notes_path(&self) -> std::path::PathBuf {
-        notes::expand(&self.config.notes_path)
+        match self.config.notes_path.trim() {
+            "" => self.paths.notes.clone(),
+            p => notes::expand(p),
+        }
     }
 
     pub fn reload_notes(&mut self) {
@@ -248,9 +251,6 @@ impl App {
                 }
             }
             // The text stays in the prompt so it isn't lost.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                self.status = "Notes folder missing: run termux-setup-storage".into()
-            }
             Err(e) => self.status = format!("Cannot save note: {e}"),
         }
     }

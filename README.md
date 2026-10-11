@@ -80,13 +80,16 @@ Settings (Apps page, top right) writes `~/.config/termdeck/config.json`:
   "list_shape": "parallelogram",
   "list_style": "filled",
   "icons": true,
-  "notes_path": "~/storage/shared/Notes/mobile.md"
+  "notes_path": ""
 }
 ```
 
 Notes are appended as `- YYYY-MM-DD HH:MM text` lines. Edits rewrite only that line (other lines,
-like headings added elsewhere, are kept) and are refused if the line changed since it was loaded. The default path is in shared storage, so
-run `termux-setup-storage` once, then sync the folder to other devices with e.g. Syncthing. Only the
+like headings added elsewhere, are kept) and are refused if the line changed since it was loaded.
+
+By default (`"notes_path": ""`) notes go to `~/.local/share/termdeck/notes.md`, private to Termux.
+To sync them to other devices, run `termux-setup-storage` once, set e.g.
+`"notes_path": "~/storage/shared/Notes/mobile.md"`, and share that folder with Syncthing. Only the
 phone writes this file, so syncing it never conflicts.
 
 `~/.config/termdeck/art.txt`, if present, replaces the katana with static ASCII art.
