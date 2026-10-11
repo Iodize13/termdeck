@@ -9,19 +9,48 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 pub const MAX_RECENT_SHOWN: usize = 8;
 const MAX_RECENT_KEPT: usize = 20;
+const DEFAULT_ART: &str = "\
+╺┳╸┏━╸┏━┓┏┳┓╺┳┓┏━╸┏━╸╻┏
+ ┃ ┣╸ ┣┳┛┃┃┃ ┃┃┣╸ ┃  ┣┻┓
+ ╹ ┗━╸╹┗╸╹ ╹╺┻┛┗━╸┗━╸╹ ╹";
 pub const OVERLAY_MSG: &str =
     "Grant Termux \"Display over other apps\": Settings > Apps > Termux > Display over other apps";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Home,
+    Apps,
+}
+
+impl Page {
+    pub const ALL: [Page; 2] = [Page::Home, Page::Apps];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Page::Home => "Home",
+            Page::Apps => "Apps",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     Launch(String),
     TogglePin(String),
+    Goto(Page),
 }
 
 pub struct App {
     pub entries: Vec<AppEntry>,
     pub state: State,
     pub paths: Paths,
+    pub page: Page,
+    /// Pinned apps the current page's grid can show (set by the renderer).
+    pub grid_cap: usize,
+    /// ASCII art for the Home page: `art.txt` from the config dir, or the built-in one.
+    pub art: String,
+    /// Where the last mouse press landed; a click fires on release unless it was a swipe.
+    pub press: Option<(u16, u16)>,
     pub query: String,
     pub selected: usize,
     pub scroll: usize,
@@ -43,10 +72,17 @@ impl App {
         let (tx, rx) = channel();
         let entries: Vec<AppEntry> = read_json(&paths.index).unwrap_or_default();
         let state: State = read_json(&paths.state).unwrap_or_default();
+        let art = std::fs::read_to_string(&paths.art)
+            .map(|s| s.trim_end().to_string())
+            .unwrap_or_else(|_| DEFAULT_ART.to_string());
         let mut app = Self {
             entries,
             state,
             paths,
+            page: Page::Home,
+            grid_cap: usize::MAX,
+            art,
+            press: None,
             query: String::new(),
             selected: 0,
             scroll: 0,
@@ -71,27 +107,47 @@ impl App {
         self.entries.iter().find(|e| e.pkg == pkg)
     }
 
+    /// The current page's pin list.
+    fn pins(&self) -> &Vec<String> {
+        match self.page {
+            Page::Home => &self.state.pinned,
+            Page::Apps => &self.state.pinned_apps,
+        }
+    }
+
+    fn pins_mut(&mut self) -> &mut Vec<String> {
+        match self.page {
+            Page::Home => &mut self.state.pinned,
+            Page::Apps => &mut self.state.pinned_apps,
+        }
+    }
+
+    /// Pinned on the current page.
     pub fn is_pinned(&self, pkg: &str) -> bool {
-        self.state.pinned.iter().any(|p| p == pkg)
+        self.pins().iter().any(|p| p == pkg)
     }
 
-    /// Pinned apps that are still installed, in pin order.
+    /// Current page's pinned apps that are still installed and fit the grid, in pin order.
     pub fn pinned(&self) -> Vec<&AppEntry> {
-        self.state.pinned.iter().filter_map(|p| self.find(p)).collect()
+        self.pins().iter().filter_map(|p| self.find(p)).take(self.grid_cap).collect()
     }
 
-    /// Recent apps: installed, not pinned, at most `MAX_RECENT_SHOWN`.
+    /// Recent apps (Apps page only): installed, not pinned on any page, at most `MAX_RECENT_SHOWN`.
     pub fn recent(&self) -> Vec<&AppEntry> {
+        if self.page != Page::Apps {
+            return Vec::new();
+        }
+        let pinned_anywhere = |p: &String| self.state.pinned.contains(p) || self.state.pinned_apps.contains(p);
         self.state
             .recent
             .iter()
-            .filter(|p| !self.is_pinned(p))
+            .filter(|p| !pinned_anywhere(p))
             .filter_map(|p| self.find(p))
             .take(MAX_RECENT_SHOWN)
             .collect()
     }
 
-    /// Items the selection moves over: search results, or pinned then recent.
+    /// Items the selection moves over: search results, or the page's pinned then recent.
     pub fn items(&self) -> Vec<&AppEntry> {
         if self.searching() {
             search(&self.entries, &self.query)
@@ -129,6 +185,21 @@ impl App {
         self.follow_selection = true;
     }
 
+    pub fn goto(&mut self, page: Page) {
+        if self.page != page {
+            self.page = page;
+            self.grid_cap = usize::MAX;
+            self.reset_view();
+        }
+    }
+
+    /// Switch to the next (`delta` > 0) or previous page, wrapping around.
+    pub fn cycle_page(&mut self, delta: isize) {
+        let n = Page::ALL.len() as isize;
+        let i = Page::ALL.iter().position(|p| *p == self.page).unwrap_or(0) as isize;
+        self.goto(Page::ALL[(i + delta).rem_euclid(n) as usize]);
+    }
+
     pub fn move_selection(&mut self, delta: isize) {
         let n = self.items().len();
         if n == 0 {
@@ -145,6 +216,19 @@ impl App {
         self.follow_selection = false;
     }
 
+    /// Mouse release: a mostly-horizontal drag of 6+ columns switches pages, anything else is a click
+    /// at the press position.
+    pub fn release(&mut self, col: u16, row: u16) {
+        let Some((pc, pr)) = self.press.take() else { return };
+        let dx = col as i32 - pc as i32;
+        let dy = row as i32 - pr as i32;
+        if dx.abs() >= 6 && dx.abs() > dy.abs() * 2 {
+            self.cycle_page(if dx < 0 { 1 } else { -1 });
+        } else {
+            self.click(pc, pr);
+        }
+    }
+
     pub fn click(&mut self, col: u16, row: u16) {
         let hit = self
             .hits
@@ -155,6 +239,7 @@ impl App {
         match hit {
             Some(Action::Launch(pkg)) => self.launch(&pkg),
             Some(Action::TogglePin(pkg)) => self.toggle_pin(&pkg),
+            Some(Action::Goto(page)) => self.goto(page),
             None => {}
         }
     }
@@ -162,11 +247,18 @@ impl App {
     // ---- actions ----
 
     pub fn toggle_pin(&mut self, pkg: &str) {
-        if let Some(i) = self.state.pinned.iter().position(|p| p == pkg) {
-            self.state.pinned.remove(i);
+        let pins = self.pins_mut();
+        if let Some(i) = pins.iter().position(|p| p == pkg) {
+            pins.remove(i);
         } else {
-            self.state.pinned.push(pkg.to_string());
+            pins.push(pkg.to_string());
         }
+        let label = self.find(pkg).map_or(pkg, |e| &e.label);
+        self.status = if self.is_pinned(pkg) {
+            format!("Pinned {label} to {}", self.page.title())
+        } else {
+            format!("Unpinned {label} from {}", self.page.title())
+        };
         self.save_state();
         let n = self.items().len();
         self.selected = self.selected.min(n.saturating_sub(1));

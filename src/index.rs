@@ -105,7 +105,7 @@ mod tests {
     fn failure_keeps_old_index() {
         let dir = std::env::temp_dir().join(format!("termdeck-idx-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let paths = Paths::in_dirs(&dir.join("c"), &dir.join("d"));
+        let paths = Paths::in_dirs(&dir.join("c"), &dir.join("d"), &dir.join("e"));
         let old = vec![AppEntry { pkg: "a".into(), activity: "a/A".into(), label: "A".into(), apk_mtime: 1 }];
         write_atomic(&paths.index, &old).unwrap();
 
@@ -123,7 +123,7 @@ mod tests {
     fn success_saves_and_sends() {
         let dir = std::env::temp_dir().join(format!("termdeck-idx2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let paths = Paths::in_dirs(&dir.join("c"), &dir.join("d"));
+        let paths = Paths::in_dirs(&dir.join("c"), &dir.join("d"), &dir.join("e"));
         let new = vec![AppEntry { pkg: "b".into(), activity: "b/B".into(), label: "B".into(), apk_mtime: 2 }];
         let n2 = new.clone();
         let (tx, rx) = std::sync::mpsc::channel();

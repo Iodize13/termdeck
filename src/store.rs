@@ -12,8 +12,12 @@ pub struct AppEntry {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
+    /// Pins on the Home page.
     #[serde(default)]
     pub pinned: Vec<String>,
+    /// Pins on the Apps page.
+    #[serde(default)]
+    pub pinned_apps: Vec<String>,
     #[serde(default)]
     pub recent: Vec<String>,
 }
@@ -22,6 +26,8 @@ pub struct State {
 pub struct Paths {
     pub index: PathBuf,
     pub state: PathBuf,
+    /// Optional ASCII art shown on the Home page.
+    pub art: PathBuf,
 }
 
 impl Paths {
@@ -33,13 +39,18 @@ impl Paths {
                 None => fallback.iter().fold(home.clone(), |p, s| p.join(s)),
             }
         };
-        Self::in_dirs(&dir("XDG_CACHE_HOME", &[".cache"]), &dir("XDG_DATA_HOME", &[".local", "share"]))
+        Self::in_dirs(
+            &dir("XDG_CACHE_HOME", &[".cache"]),
+            &dir("XDG_DATA_HOME", &[".local", "share"]),
+            &dir("XDG_CONFIG_HOME", &[".config"]),
+        )
     }
 
-    pub fn in_dirs(cache: &Path, data: &Path) -> Self {
+    pub fn in_dirs(cache: &Path, data: &Path, config: &Path) -> Self {
         Self {
             index: cache.join("termdeck").join("index.json"),
             state: data.join("termdeck").join("state.json"),
+            art: config.join("termdeck").join("art.txt"),
         }
     }
 }
@@ -67,7 +78,7 @@ mod tests {
     fn roundtrip() {
         let dir = std::env::temp_dir().join(format!("termdeck-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let paths = Paths::in_dirs(&dir.join("cache"), &dir.join("data"));
+        let paths = Paths::in_dirs(&dir.join("cache"), &dir.join("data"), &dir.join("config"));
 
         let idx = vec![AppEntry {
             pkg: "a.b".into(),
@@ -75,7 +86,11 @@ mod tests {
             label: "B".into(),
             apk_mtime: 42,
         }];
-        let st = State { pinned: vec!["a.b".into()], recent: vec!["c.d".into(), "a.b".into()] };
+        let st = State {
+            pinned: vec!["a.b".into()],
+            pinned_apps: vec!["e.f".into()],
+            recent: vec!["c.d".into(), "a.b".into()],
+        };
 
         write_atomic(&paths.index, &idx).unwrap();
         write_atomic(&paths.state, &st).unwrap();
