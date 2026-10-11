@@ -1,4 +1,4 @@
-use crate::index::{BuildStats, IndexEvent, build_index, spawn_refresh};
+use crate::index::{IndexEvent, build_index, spawn_refresh};
 use crate::parse::{LaunchResult, classify_launch, socket_unavailable};
 use crate::run::run_capture;
 use crate::store::{AppEntry, Paths, State, read_json, write_atomic};
@@ -6,7 +6,6 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::layout::Rect;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Instant;
 
 pub const MAX_RECENT_SHOWN: usize = 8;
 const MAX_RECENT_KEPT: usize = 20;
@@ -187,7 +186,6 @@ impl App {
 
     pub fn launch(&mut self, pkg: &str) {
         let Some(entry) = self.find(pkg).cloned() else { return };
-        let t = Instant::now();
         let start = |program: &str| {
             run_capture(program, &["start", "-n", &entry.activity])
                 .map(|out| {
@@ -207,7 +205,6 @@ impl App {
             Ok(t) => classify_launch(&t),
             Err(e) => LaunchResult::Failed(e),
         };
-        let ms = t.elapsed().as_millis();
         match result {
             LaunchResult::Success | LaunchResult::BroughtToFront => {
                 self.state.recent.retain(|p| p != pkg);
@@ -215,7 +212,7 @@ impl App {
                 self.state.recent.truncate(MAX_RECENT_KEPT);
                 self.save_state();
                 self.clear_query();
-                self.status = format!("Launched {} ({ms} ms)", entry.label);
+                self.status = format!("Launched {}", entry.label);
             }
             LaunchResult::NeedsOverlayPermission => self.status = OVERLAY_MSG.to_string(),
             LaunchResult::Failed(msg) => {
@@ -240,13 +237,7 @@ impl App {
         while let Ok(ev) = self.rx.try_recv() {
             self.refreshing = false;
             match ev {
-                IndexEvent::Updated(entries, BuildStats { aapt_reads, fallbacks }) => {
-                    self.entries = entries;
-                    self.status = format!(
-                        "Index: {} apps ({aapt_reads} labels read, {fallbacks} fallback)",
-                        self.entries.len()
-                    );
-                }
+                IndexEvent::Updated(entries) => self.entries = entries,
                 IndexEvent::Failed(msg) => self.status = format!("Index refresh failed: {msg}"),
             }
         }

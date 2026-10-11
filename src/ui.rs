@@ -7,14 +7,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 const ROW_H: u16 = 3;
-const PIN_W: u16 = 6;
-const BTN_BG: Color = Color::Rgb(36, 84, 160);
-const BTN_FG: Color = Color::White;
-const SEL_BG: Color = Color::Rgb(240, 180, 40);
-const SEL_FG: Color = Color::Black;
-const ROW_BG: Color = Color::Rgb(34, 38, 48);
-const PIN_ON_BG: Color = Color::Rgb(200, 150, 30);
-const PIN_OFF_BG: Color = Color::Rgb(62, 68, 84);
+const PIN_W: u16 = 4;
+// Terminal palette colors only (no backgrounds), so termdeck follows the terminal's theme.
+const BORDER: Color = Color::Blue;
+const ACCENT: Color = Color::Yellow;
+const MUTED: Color = Color::DarkGray;
+// Nerd Font star / star-outline (nf-fa-star, nf-fa-star_o).
+const STAR_ON: &str = "\u{f005}";
+const STAR_OFF: &str = "\u{f006}";
 
 pub fn grid_columns(width: u16) -> u16 {
     (width / 20).max(2)
@@ -32,14 +32,21 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Filled block with the text on its middle row.
-fn filled(f: &mut Frame, area: Rect, text: &str, style: Style, align: Alignment) {
-    if area.width == 0 || area.height == 0 {
-        return;
+/// Bordered block with `line` on its middle inner row. Selected blocks get a thick accent border.
+/// Returns the inner area.
+fn boxed(f: &mut Frame, area: Rect, line: Line, sel: bool, align: Alignment) -> Rect {
+    if area.width < 2 || area.height < 2 {
+        return Rect::default();
     }
-    f.render_widget(Block::default().style(style), area);
-    let mid = Rect { y: area.y + area.height / 2, height: 1, ..area };
-    f.render_widget(Paragraph::new(text.to_string()).style(style).alignment(align), mid);
+    let (color, kind) = if sel { (ACCENT, BorderType::Thick) } else { (BORDER, BorderType::Plain) };
+    let block = Block::default().borders(Borders::ALL).border_type(kind).border_style(Style::default().fg(color));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height > 0 {
+        let mid = Rect { y: inner.y + inner.height.saturating_sub(1) / 2, height: 1, ..inner };
+        f.render_widget(Paragraph::new(line).alignment(align), mid);
+    }
+    inner
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -92,13 +99,10 @@ fn draw_home(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry]) {
                 height: ROW_H,
             };
             let sel = app.selected == i;
-            let style = if sel {
-                Style::default().bg(SEL_BG).fg(SEL_FG).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().bg(BTN_BG).fg(BTN_FG).add_modifier(Modifier::BOLD)
-            };
+            let style = Style::default().add_modifier(Modifier::BOLD);
+            let style = if sel { style.fg(ACCENT) } else { style };
             let label = truncate(&e.label, (rect.width as usize).saturating_sub(2));
-            filled(f, rect, &label, style, Alignment::Center);
+            boxed(f, rect, Line::styled(label, style), sel, Alignment::Center);
             app.hits.push((rect, Action::Launch(e.pkg.clone())));
         }
     }
@@ -154,27 +158,29 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry], base:
         let idx = base + app.scroll + slot;
         let rect = Rect { y: area.y + slot as u16 * ROW_H, height: ROW_H, ..area };
         let sel = app.selected == idx;
-        let (bg, fg) = if sel { (SEL_BG, SEL_FG) } else { (ROW_BG, Color::White) };
-        let label_rect = Rect { width: rect.width.saturating_sub(PIN_W), ..rect };
-        let pin_rect = Rect { x: rect.x + label_rect.width, width: rect.width - label_rect.width, ..rect };
+        let pinned = app.is_pinned(&e.pkg);
 
-        f.render_widget(Block::default().style(Style::default().bg(bg)), label_rect);
-        let avail = (label_rect.width as usize).saturating_sub(2);
+        // Border + 1 space of padding on the left; the pin column is on the right.
+        let avail = (rect.width as usize).saturating_sub(3 + PIN_W as usize);
         let label = truncate(&e.label, avail);
         let pkg_room = avail.saturating_sub(label.chars().count() + 2);
-        let mut spans = vec![Span::styled(label, Style::default().fg(fg).add_modifier(Modifier::BOLD))];
+        let label_style = Style::default().add_modifier(Modifier::BOLD);
+        let mut spans = vec![
+            Span::raw(" "),
+            Span::styled(label, if sel { label_style.fg(ACCENT) } else { label_style }),
+        ];
         if pkg_room > 4 {
-            spans.push(Span::styled(
-                format!("  {}", truncate(&e.pkg, pkg_room)),
-                Style::default().fg(if sel { Color::Rgb(60, 40, 0) } else { Color::DarkGray }),
-            ));
+            spans.push(Span::styled(format!("  {}", truncate(&e.pkg, pkg_room)), Style::default().fg(MUTED)));
         }
-        let text_rect = Rect { x: label_rect.x + 1, width: label_rect.width.saturating_sub(1), y: rect.y + 1, height: 1 };
-        f.render_widget(Paragraph::new(Line::from(spans)).style(Style::default().bg(bg)), text_rect);
+        let inner = boxed(f, rect, Line::from(spans), sel, Alignment::Left);
 
-        let pinned = app.is_pinned(&e.pkg);
-        let (pbg, glyph) = if pinned { (PIN_ON_BG, "[★]") } else { (PIN_OFF_BG, "[☆]") };
-        filled(f, pin_rect, glyph, Style::default().bg(pbg).fg(if pinned { Color::Black } else { Color::White }), Alignment::Center);
+        // Pin toggle: the right end of the same box, border included so it's easy to tap.
+        let pin_w = PIN_W.min(inner.width);
+        let pin_rect = Rect { x: rect.x + rect.width - pin_w - 1, width: pin_w + 1, ..rect };
+        let label_rect = Rect { width: rect.width - pin_rect.width, ..rect };
+        let (color, glyph) = if pinned { (ACCENT, STAR_ON) } else { (MUTED, STAR_OFF) };
+        let star = Rect { x: pin_rect.x, y: inner.y, width: pin_w, height: 1 };
+        f.render_widget(Paragraph::new(Span::styled(glyph, Style::default().fg(color))).alignment(Alignment::Center), star);
 
         app.hits.push((pin_rect, Action::TogglePin(e.pkg.clone())));
         app.hits.push((label_rect, Action::Launch(e.pkg.clone())));
@@ -182,17 +188,20 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry], base:
 }
 
 fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).border_type(BorderType::Plain);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(Style::default().fg(BORDER));
     let line = if app.query.is_empty() {
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
-            Span::styled("type to search…", Style::default().fg(Color::DarkGray)),
+            Span::styled("> ", Style::default().fg(ACCENT)),
+            Span::styled("type to search…", Style::default().fg(MUTED)),
         ])
     } else {
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(ACCENT)),
             Span::raw(app.query.clone()),
-            Span::styled("▌", Style::default().fg(Color::Cyan)),
+            Span::styled("▌", Style::default().fg(ACCENT)),
         ])
     };
     f.render_widget(Paragraph::new(line).block(block), area);
@@ -208,7 +217,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     };
     let width = area.width as usize;
     f.render_widget(
-        Paragraph::new(truncate(&text, width)).style(Style::default().fg(Color::Yellow)),
+        Paragraph::new(truncate(&text, width)).style(Style::default().fg(ACCENT)),
         area,
     );
 }
