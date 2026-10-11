@@ -80,3 +80,7 @@ Settings (Apps page, top right) writes `~/.config/termdeck/config.json`:
 `~/.config/termdeck/art.txt`, if present, replaces the katana with static ASCII art.
 
 State: `~/.cache/termdeck/index.json`, `~/.local/share/termdeck/state.json` (honours `XDG_*`).
+
+## Known issues
+
+- Hiding the on-screen keyboard and then bringing it back can freeze termdeck. Restart Termux to recover.
