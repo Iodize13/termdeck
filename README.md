@@ -98,4 +98,7 @@ State: `~/.cache/termdeck/index.json`, `~/.local/share/termdeck/state.json` (hon
 
 ## Known issues
 
-- Hiding the on-screen keyboard and then bringing it back can freeze termdeck. Restart Termux to recover.
+- After the on-screen keyboard hides, the screen can stop updating. This is Termux, not termdeck: a
+  plain shell freezes the same way (input is still processed, only the view doesn't redraw). Seen on
+  Termux 0.118.0 with `background-image` in `termux.properties`. Switch to another app and back to
+  recover; no need to restart Termux.
