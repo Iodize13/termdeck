@@ -32,6 +32,14 @@ pub enum ButtonStyle {
     Filled,
 }
 
+/// Outline of app buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ButtonShape {
+    Rectangle,
+    Parallelogram,
+}
+
 /// User settings, `config.json` in the config dir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -42,11 +50,21 @@ pub struct Config {
     pub pinned_style: ButtonStyle,
     /// Recent and search-result rows.
     pub list_style: ButtonStyle,
+    /// Shape of all app buttons.
+    pub shape: ButtonShape,
+    /// Show Nerd Font app icons.
+    pub icons: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { home_rows: 3, pinned_style: ButtonStyle::Outline, list_style: ButtonStyle::Filled }
+        Self {
+            home_rows: 3,
+            pinned_style: ButtonStyle::Outline,
+            list_style: ButtonStyle::Filled,
+            shape: ButtonShape::Parallelogram,
+            icons: true,
+        }
     }
 }
 

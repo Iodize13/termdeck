@@ -1,7 +1,7 @@
 use crate::index::{IndexEvent, build_index, spawn_refresh};
 use crate::parse::{LaunchResult, classify_launch, socket_unavailable};
 use crate::run::run_capture;
-use crate::store::{AppEntry, ButtonStyle, Config, Paths, State, parse_palette, read_json, write_atomic};
+use crate::store::{AppEntry, ButtonShape, ButtonStyle, Config, Paths, State, parse_palette, read_json, write_atomic};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Utf32Str};
 use ratatui::layout::Rect;
@@ -45,6 +45,8 @@ pub enum Action {
     AdjustHomeRows(i16),
     SetPinnedStyle(ButtonStyle),
     SetListStyle(ButtonStyle),
+    SetShape(ButtonShape),
+    SetIcons(bool),
 }
 
 pub struct App {
@@ -282,6 +284,14 @@ impl App {
             }
             Some(Action::SetListStyle(s)) => {
                 self.config.list_style = s;
+                self.save_config();
+            }
+            Some(Action::SetShape(s)) => {
+                self.config.shape = s;
+                self.save_config();
+            }
+            Some(Action::SetIcons(on)) => {
+                self.config.icons = on;
                 self.save_config();
             }
             None => {}

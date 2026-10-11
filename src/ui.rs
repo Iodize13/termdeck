@@ -1,6 +1,6 @@
 use crate::app::{Action, App, MAX_HOME_ROWS, Page};
 use crate::icons::icon_for;
-use crate::store::{AppEntry, ButtonStyle};
+use crate::store::{AppEntry, ButtonShape, ButtonStyle};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -8,6 +8,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 const ROW_H: u16 = 3;
+/// Pinned grid rows are ROW_H tall with a blank line between them.
+const GRID_PITCH: u16 = ROW_H + 1;
 const PIN_W: u16 = 4;
 // Terminal palette colors only (no backgrounds), so termdeck follows the terminal's theme.
 const BORDER: Color = Color::Blue;
@@ -89,10 +91,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// Grid rows a page may use: Home has a configured count, Apps leaves room for the Recent list.
 /// One line is kept free for the "not shown" warning.
 fn grid_max_rows(app: &App, height: u16) -> u16 {
-    let fit = height.saturating_sub(1) / ROW_H;
+    // n rows take n * GRID_PITCH - 1 lines; one more is kept for the warning line.
+    let fit = height / GRID_PITCH;
     match app.page {
         Page::Home => fit.min(app.config.home_rows),
-        Page::Apps => (height.saturating_sub(ROW_H + 2) / ROW_H).max(1).min(fit),
+        // Leave the Recent heading (with its spacing) and one list row.
+        Page::Apps => (height.saturating_sub(ROW_H + 3) / GRID_PITCH).max(1).min(fit),
         Page::Settings => 0,
     }
 }
@@ -140,13 +144,23 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
     let style_cells = |cur: ButtonStyle, set: fn(ButtonStyle) -> Action| {
         [ButtonStyle::Outline, ButtonStyle::Filled]
             .into_iter()
-            .map(|s| (format!("{s:?}"), Some(set(s)), s == cur))
+            .map(|s| (style_name(s).to_string(), Some(set(s)), s == cur))
             .collect::<Vec<_>>()
     };
+    let shape_cells = [ButtonShape::Rectangle, ButtonShape::Parallelogram]
+        .into_iter()
+        .map(|s| (shape_name(s).to_string(), Some(Action::SetShape(s)), s == app.config.shape))
+        .collect();
+    let icon_cells = [(false, "Off"), (true, "On")]
+        .into_iter()
+        .map(|(on, t)| (t.to_string(), Some(Action::SetIcons(on)), on == app.config.icons))
+        .collect();
     let sections = [
         ("Home rows", row_cells),
+        ("Shape", shape_cells),
         ("Pinned style", style_cells(app.config.pinned_style, Action::SetPinnedStyle)),
         ("List style", style_cells(app.config.list_style, Action::SetListStyle)),
+        ("Icons", icon_cells),
     ];
     let mut y = area.y + 1;
     for (title, cells) in sections {
@@ -165,6 +179,21 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(note).style(Style::default().fg(MUTED)).wrap(ratatui::widgets::Wrap { trim: true }),
         Rect { y, height: (area.y + area.height).saturating_sub(y), ..area },
     );
+}
+
+// Short option labels so they fit narrow screens.
+fn style_name(s: ButtonStyle) -> &'static str {
+    match s {
+        ButtonStyle::Outline => "Line",
+        ButtonStyle::Filled => "Fill",
+    }
+}
+
+fn shape_name(s: ButtonShape) -> &'static str {
+    match s {
+        ButtonShape::Rectangle => "Rect",
+        ButtonShape::Parallelogram => "Slant",
+    }
 }
 
 /// A row of equal boxes. Each cell is (text, tap action, highlighted); a cell without an action
@@ -219,11 +248,16 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry]) {
                 app.visible_rows = 0;
                 return;
             }
+            // Blank line, "Recent", blank line, then the rows.
+            if rest.height < 3 + ROW_H {
+                app.visible_rows = 0;
+                return;
+            }
             f.render_widget(
                 Paragraph::new("Recent").style(Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
-                Rect { height: 1, ..rest },
+                Rect { y: rest.y + 1, height: 1, ..rest },
             );
-            let rows = Rect { y: rest.y + 1, height: rest.height - 1, ..rest };
+            let rows = Rect { y: rest.y + 3, height: rest.height - 3, ..rest };
             draw_list(f, app, rows, recent, pinned_n);
         }
     }
@@ -249,7 +283,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, pinned: &[AppEntry]) -> u
         // 1 column gap between buttons, except on the last column.
         let rect = Rect {
             x: area.x + bw * c,
-            y: area.y + r * ROW_H,
+            y: area.y + r * GRID_PITCH,
             width: if c == cols - 1 { w } else { w.saturating_sub(1) },
             height: ROW_H,
         };
@@ -260,15 +294,15 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, pinned: &[AppEntry]) -> u
             (false, ButtonStyle::Outline) => BORDER,
             (false, ButtonStyle::Filled) => FILLS[i % FILLS.len()],
         };
-        let inner = slanted(f, rect, style, color);
+        let inner = button(f, rect, app.config.shape, style, color);
         let text = content_style(app, style, color, sel.then_some(ACCENT));
         // Bold only off a fill: some terminals render bold as the bright color, which on a fill
         // would no longer match the computed readable color.
         let text = if style == ButtonStyle::Outline { text.add_modifier(Modifier::BOLD) } else { text };
-        f.render_widget(Paragraph::new(icon_label(e, inner.width, text)).style(text).alignment(Alignment::Center), inner);
+        f.render_widget(Paragraph::new(icon_label(e, inner.width, text, app.config.icons)).style(text).alignment(Alignment::Center), inner);
         app.hits.push((rect, Action::Launch(e.pkg.clone())));
     }
-    (pinned.len() as u16).div_ceil(cols) * ROW_H
+    (pinned.len() as u16).div_ceil(cols) * GRID_PITCH - 1
 }
 
 /// Slanted (parallelogram) button, 3 rows, each row shifted one column left of the one above.
@@ -277,6 +311,29 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, pinned: &[AppEntry]) -> u
 ///   Outline:  ▔▔▔▔▔▔      Filled:  ██████
 ///             X abc               X abc 
 ///            ▁▁▁▁▁▁               ██████
+/// Button of either shape; returns the middle row's content area.
+fn button(f: &mut Frame, rect: Rect, shape: ButtonShape, style: ButtonStyle, color: Color) -> Rect {
+    match shape {
+        ButtonShape::Parallelogram => slanted(f, rect, style, color),
+        ButtonShape::Rectangle => rectangle(f, rect, style, color),
+    }
+}
+
+/// Square-cornered box, outlined or filled, 3 rows.
+fn rectangle(f: &mut Frame, rect: Rect, style: ButtonStyle, color: Color) -> Rect {
+    if rect.width < 4 || rect.height < 3 {
+        return Rect::default();
+    }
+    match style {
+        ButtonStyle::Outline => f.render_widget(
+            Block::default().borders(Borders::ALL).border_style(Style::default().fg(color)),
+            rect,
+        ),
+        ButtonStyle::Filled => f.render_widget(Block::default().style(Style::default().bg(color)), rect),
+    }
+    Rect { x: rect.x + 1, y: rect.y + 1, width: rect.width - 2, height: 1 }
+}
+
 fn slanted(f: &mut Frame, rect: Rect, style: ButtonStyle, color: Color) -> Rect {
     let (x, y, w) = (rect.x, rect.y, rect.width);
     if w < 6 || rect.height < 3 {
@@ -341,8 +398,11 @@ fn text_on(palette: &[Option<(u8, u8, u8)>; 16], fill: Color) -> Color {
     if contrast(bg, black) > contrast(bg, white) { Color::Black } else { Color::White }
 }
 
-/// "<icon> <label>", truncated to `width`.
-fn icon_label(e: &AppEntry, width: u16, style: Style) -> Line<'static> {
+/// "<icon> <label>" (or just the label when icons are off), truncated to `width`.
+fn icon_label(e: &AppEntry, width: u16, style: Style, icons: bool) -> Line<'static> {
+    if !icons {
+        return Line::styled(truncate(&e.label, width as usize), style);
+    }
     let icon = icon_for(&e.pkg, &e.label);
     if width < 5 {
         return Line::styled(icon, style);
@@ -487,7 +547,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry], base:
 
         let color = if sel { ACCENT } else { FILLS[idx % FILLS.len()] };
         let style = app.config.list_style;
-        let inner = slanted(f, rect, style, color);
+        let inner = button(f, rect, app.config.shape, style, color);
         // Icon and label share one color (no bold: it can render as the bright variant).
         let solid = content_style(app, style, color, Some(color));
         // Pin toggle on the right end of the bar; the whole height is the tap target.
@@ -499,8 +559,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry], base:
         let avail = text.width as usize;
         let label = truncate(&e.label, avail.saturating_sub(3));
         let pkg_room = avail.saturating_sub(label.chars().count() + 5);
+        let icon = if app.config.icons { format!(" {} ", icon_for(&e.pkg, &e.label)) } else { " ".into() };
         let mut spans = vec![
-            Span::styled(format!(" {} ", icon_for(&e.pkg, &e.label)), solid),
+            Span::styled(icon, solid),
             Span::styled(label, if sel { solid.add_modifier(Modifier::UNDERLINED) } else { solid }),
         ];
         if pkg_room > 4 {
