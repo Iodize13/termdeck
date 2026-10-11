@@ -1,18 +1,18 @@
 use crate::index::{IndexEvent, build_index, spawn_refresh};
 use crate::parse::{LaunchResult, classify_launch, socket_unavailable};
 use crate::run::run_capture;
-use crate::store::{AppEntry, Paths, State, read_json, write_atomic};
+use crate::store::{AppEntry, ButtonStyle, Config, Paths, State, parse_palette, read_json, write_atomic};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
+use nucleo_matcher::{Matcher, Utf32Str};
 use ratatui::layout::Rect;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
 pub const MAX_RECENT_SHOWN: usize = 8;
 const MAX_RECENT_KEPT: usize = 20;
-const DEFAULT_ART: &str = "\
-╺┳╸┏━╸┏━┓┏┳┓╺┳┓┏━╸┏━╸╻┏
- ┃ ┣╸ ┣┳┛┃┃┃ ┃┃┣╸ ┃  ┣┻┓
- ╹ ┗━╸╹┗╸╹ ╹╺┻┛┗━╸┗━╸╹ ╹";
+pub const MAX_HOME_ROWS: u16 = 8;
+/// A swipe arrives as a burst of wheel events; after a page switch, ignore the rest of it.
+const SWIPE_COOLDOWN: Duration = Duration::from_millis(500);
 pub const OVERLAY_MSG: &str =
     "Grant Termux \"Display over other apps\": Settings > Apps > Termux > Display over other apps";
 
@@ -20,15 +20,19 @@ pub const OVERLAY_MSG: &str =
 pub enum Page {
     Home,
     Apps,
+    /// Opened from the Apps page; not a tab.
+    Settings,
 }
 
 impl Page {
+    /// Pages in the tab bar, in order.
     pub const ALL: [Page; 2] = [Page::Home, Page::Apps];
 
     pub fn title(self) -> &'static str {
         match self {
             Page::Home => "Home",
             Page::Apps => "Apps",
+            Page::Settings => "Settings",
         }
     }
 }
@@ -38,6 +42,9 @@ pub enum Action {
     Launch(String),
     TogglePin(String),
     Goto(Page),
+    AdjustHomeRows(i16),
+    SetPinnedStyle(ButtonStyle),
+    SetListStyle(ButtonStyle),
 }
 
 pub struct App {
@@ -47,10 +54,14 @@ pub struct App {
     pub page: Page,
     /// Pinned apps the current page's grid can show (set by the renderer).
     pub grid_cap: usize,
-    /// ASCII art for the Home page: `art.txt` from the config dir, or the built-in one.
-    pub art: String,
-    /// Where the last mouse press landed; a click fires on release unless it was a swipe.
-    pub press: Option<(u16, u16)>,
+    /// Static ASCII art for the Home page from `art.txt`; without it Home shows a spinning katana.
+    pub art: Option<String>,
+    /// RGB of the terminal's 16 colors, when known (Termux `colors.properties`).
+    pub palette: [Option<(u8, u8, u8)>; 16],
+    /// Drives the Home animation.
+    pub started: Instant,
+    pub config: Config,
+    last_switch: Option<Instant>,
     pub query: String,
     pub selected: usize,
     pub scroll: usize,
@@ -72,9 +83,14 @@ impl App {
         let (tx, rx) = channel();
         let entries: Vec<AppEntry> = read_json(&paths.index).unwrap_or_default();
         let state: State = read_json(&paths.state).unwrap_or_default();
-        let art = std::fs::read_to_string(&paths.art)
-            .map(|s| s.trim_end().to_string())
-            .unwrap_or_else(|_| DEFAULT_ART.to_string());
+        let mut config: Config = read_json(&paths.config).unwrap_or_default();
+        config.home_rows = config.home_rows.clamp(1, MAX_HOME_ROWS);
+        let palette = paths
+            .termux_colors
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map_or([None; 16], |s| parse_palette(&s));
+        let art = std::fs::read_to_string(&paths.art).ok().map(|s| s.trim_end().to_string());
         let mut app = Self {
             entries,
             state,
@@ -82,7 +98,10 @@ impl App {
             page: Page::Home,
             grid_cap: usize::MAX,
             art,
-            press: None,
+            started: Instant::now(),
+            palette,
+            config,
+            last_switch: None,
             query: String::new(),
             selected: 0,
             scroll: 0,
@@ -108,18 +127,25 @@ impl App {
     }
 
     /// The current page's pin list.
-    fn pins(&self) -> &Vec<String> {
+    fn pins(&self) -> &[String] {
         match self.page {
             Page::Home => &self.state.pinned,
             Page::Apps => &self.state.pinned_apps,
+            Page::Settings => &[],
         }
     }
 
-    fn pins_mut(&mut self) -> &mut Vec<String> {
+    fn pins_mut(&mut self) -> Option<&mut Vec<String>> {
         match self.page {
-            Page::Home => &mut self.state.pinned,
-            Page::Apps => &mut self.state.pinned_apps,
+            Page::Home => Some(&mut self.state.pinned),
+            Page::Apps => Some(&mut self.state.pinned_apps),
+            Page::Settings => None,
         }
+    }
+
+    /// Current page's pinned apps that are installed but don't fit the grid.
+    pub fn pinned_hidden(&self) -> usize {
+        self.pins().iter().filter(|p| self.find(p).is_some()).count().saturating_sub(self.grid_cap)
     }
 
     /// Pinned on the current page.
@@ -196,8 +222,30 @@ impl App {
     /// Switch to the next (`delta` > 0) or previous page, wrapping around.
     pub fn cycle_page(&mut self, delta: isize) {
         let n = Page::ALL.len() as isize;
-        let i = Page::ALL.iter().position(|p| *p == self.page).unwrap_or(0) as isize;
+        // Settings sits under Apps.
+        let i = Page::ALL.iter().position(|p| *p == self.page).unwrap_or(1) as isize;
         self.goto(Page::ALL[(i + delta).rem_euclid(n) as usize]);
+    }
+
+    /// Mouse wheel (Termux sends vertical swipes as wheel events). Outside search, swiping up on
+    /// Home opens Apps and swiping down at the top of Apps returns Home; otherwise it scrolls.
+    pub fn wheel(&mut self, delta: isize) {
+        if self.last_switch.is_some_and(|t| t.elapsed() < SWIPE_COOLDOWN) {
+            return;
+        }
+        if !self.searching() {
+            let target = match self.page {
+                Page::Home if delta > 0 => Some(Page::Apps),
+                Page::Apps if delta < 0 && self.scroll == 0 => Some(Page::Home),
+                _ => None,
+            };
+            if let Some(page) = target {
+                self.goto(page);
+                self.last_switch = Some(Instant::now());
+                return;
+            }
+        }
+        self.scroll_by(delta);
     }
 
     pub fn move_selection(&mut self, delta: isize) {
@@ -216,19 +264,6 @@ impl App {
         self.follow_selection = false;
     }
 
-    /// Mouse release: a mostly-horizontal drag of 6+ columns switches pages, anything else is a click
-    /// at the press position.
-    pub fn release(&mut self, col: u16, row: u16) {
-        let Some((pc, pr)) = self.press.take() else { return };
-        let dx = col as i32 - pc as i32;
-        let dy = row as i32 - pr as i32;
-        if dx.abs() >= 6 && dx.abs() > dy.abs() * 2 {
-            self.cycle_page(if dx < 0 { 1 } else { -1 });
-        } else {
-            self.click(pc, pr);
-        }
-    }
-
     pub fn click(&mut self, col: u16, row: u16) {
         let hit = self
             .hits
@@ -240,6 +275,15 @@ impl App {
             Some(Action::Launch(pkg)) => self.launch(&pkg),
             Some(Action::TogglePin(pkg)) => self.toggle_pin(&pkg),
             Some(Action::Goto(page)) => self.goto(page),
+            Some(Action::AdjustHomeRows(d)) => self.adjust_home_rows(d),
+            Some(Action::SetPinnedStyle(s)) => {
+                self.config.pinned_style = s;
+                self.save_config();
+            }
+            Some(Action::SetListStyle(s)) => {
+                self.config.list_style = s;
+                self.save_config();
+            }
             None => {}
         }
     }
@@ -247,21 +291,38 @@ impl App {
     // ---- actions ----
 
     pub fn toggle_pin(&mut self, pkg: &str) {
-        let pins = self.pins_mut();
+        let Some(pins) = self.pins_mut() else { return };
         if let Some(i) = pins.iter().position(|p| p == pkg) {
             pins.remove(i);
         } else {
             pins.push(pkg.to_string());
         }
         let label = self.find(pkg).map_or(pkg, |e| &e.label);
-        self.status = if self.is_pinned(pkg) {
-            format!("Pinned {label} to {}", self.page.title())
-        } else {
+        self.status = if !self.is_pinned(pkg) {
             format!("Unpinned {label} from {}", self.page.title())
+        } else if self.pinned_hidden() > 0 {
+            format!("Pinned {label}, but {} is full: it won't be shown", self.page.title())
+        } else {
+            format!("Pinned {label} to {}", self.page.title())
         };
         self.save_state();
         let n = self.items().len();
         self.selected = self.selected.min(n.saturating_sub(1));
+    }
+
+    pub fn adjust_home_rows(&mut self, delta: i16) {
+        let rows = (self.config.home_rows as i16 + delta).clamp(1, MAX_HOME_ROWS as i16) as u16;
+        if rows == self.config.home_rows {
+            return;
+        }
+        self.config.home_rows = rows;
+        self.save_config();
+    }
+
+    fn save_config(&mut self) {
+        if let Err(e) = write_atomic(&self.paths.config, &self.config) {
+            self.status = format!("Cannot save config: {e}");
+        }
     }
 
     pub fn toggle_pin_selected(&mut self) {
@@ -344,7 +405,7 @@ impl App {
 
 /// Fuzzy match `query` against label and package; best score wins, ties by label.
 pub fn search<'a>(entries: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry> {
-    let mut matcher = Matcher::new(Config::DEFAULT);
+    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
     let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
     let mut buf = Vec::new();
     let mut scored: Vec<(u32, &AppEntry)> = entries
@@ -365,6 +426,21 @@ mod tests {
 
     fn e(pkg: &str, label: &str) -> AppEntry {
         AppEntry { pkg: pkg.into(), activity: format!("{pkg}/.Main"), label: label.into(), apk_mtime: 1 }
+    }
+
+    #[test]
+    fn swipe_switches_pages_once_per_burst() {
+        let dir = std::env::temp_dir().join(format!("termdeck-swipe-{}", std::process::id()));
+        let mut app = App::new(Paths::in_dirs(&dir.join("c"), &dir.join("d"), &dir.join("e")));
+        app.wheel(1);
+        assert_eq!(app.page, Page::Apps);
+        // The rest of the same swipe must not bounce back.
+        app.wheel(-1);
+        assert_eq!(app.page, Page::Apps);
+        app.last_switch = None;
+        app.wheel(-1);
+        assert_eq!(app.page, Page::Home);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -2,10 +2,11 @@ mod app;
 mod index;
 mod parse;
 mod run;
+mod icons;
 mod store;
 mod ui;
 
-use app::App;
+use app::{App, Page};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
     MouseButton, MouseEventKind,
@@ -34,6 +35,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
         match event::read()? {
             Event::Key(k) if k.kind != KeyEventKind::Release => {
                 let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+                let settings = app.page == Page::Settings;
                 match k.code {
                     KeyCode::Char('c') if ctrl => app.should_quit = true,
                     KeyCode::Char('p') if ctrl => app.toggle_pin_selected(),
@@ -43,12 +45,18 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
                     KeyCode::Esc => {
                         if app.searching() {
                             app.clear_query();
-                        } else if app.page != app::Page::Home {
-                            app.goto(app::Page::Home);
+                        } else if settings {
+                            app.goto(Page::Apps);
+                        } else if app.page != Page::Home {
+                            app.goto(Page::Home);
                         } else {
                             app.should_quit = true;
                         }
                     }
+                    // Settings has no search; +/- and arrows adjust Home rows.
+                    KeyCode::Char('+' | '=') | KeyCode::Right | KeyCode::Up if settings => app.adjust_home_rows(1),
+                    KeyCode::Char('-') | KeyCode::Left | KeyCode::Down if settings => app.adjust_home_rows(-1),
+                    _ if settings => {}
                     KeyCode::Enter => app.launch_selected(),
                     KeyCode::Backspace => app.backspace(),
                     KeyCode::Up | KeyCode::Left => app.move_selection(-1),
@@ -58,12 +66,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
                 }
             }
             Event::Mouse(m) => match m.kind {
-                MouseEventKind::Down(MouseButton::Left) => app.press = Some((m.column, m.row)),
-                MouseEventKind::Up(MouseButton::Left) => app.release(m.column, m.row),
-                MouseEventKind::ScrollLeft => app.cycle_page(-1),
-                MouseEventKind::ScrollRight => app.cycle_page(1),
-                MouseEventKind::ScrollUp => app.scroll_by(-1),
-                MouseEventKind::ScrollDown => app.scroll_by(1),
+                MouseEventKind::Down(MouseButton::Left) => app.click(m.column, m.row),
+                MouseEventKind::ScrollUp => app.wheel(-1),
+                MouseEventKind::ScrollDown => app.wheel(1),
                 _ => {}
             },
             _ => {}

@@ -22,12 +22,43 @@ pub struct State {
     pub recent: Vec<String>,
 }
 
+/// How app buttons are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ButtonStyle {
+    /// Slanted outline only; the background shows through.
+    Outline,
+    /// Slanted solid fill.
+    Filled,
+}
+
+/// User settings, `config.json` in the config dir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    /// Grid rows of pinned apps on the Home page.
+    pub home_rows: u16,
+    /// Pinned-app grid buttons.
+    pub pinned_style: ButtonStyle,
+    /// Recent and search-result rows.
+    pub list_style: ButtonStyle,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { home_rows: 3, pinned_style: ButtonStyle::Outline, list_style: ButtonStyle::Filled }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub index: PathBuf,
     pub state: PathBuf,
     /// Optional ASCII art shown on the Home page.
     pub art: PathBuf,
+    pub config: PathBuf,
+    /// Termux's color scheme, read to pick readable text on filled rows.
+    pub termux_colors: Option<PathBuf>,
 }
 
 impl Paths {
@@ -39,11 +70,13 @@ impl Paths {
                 None => fallback.iter().fold(home.clone(), |p, s| p.join(s)),
             }
         };
-        Self::in_dirs(
+        let mut paths = Self::in_dirs(
             &dir("XDG_CACHE_HOME", &[".cache"]),
             &dir("XDG_DATA_HOME", &[".local", "share"]),
             &dir("XDG_CONFIG_HOME", &[".config"]),
-        )
+        );
+        paths.termux_colors = Some(home.join(".termux").join("colors.properties"));
+        paths
     }
 
     pub fn in_dirs(cache: &Path, data: &Path, config: &Path) -> Self {
@@ -51,8 +84,26 @@ impl Paths {
             index: cache.join("termdeck").join("index.json"),
             state: data.join("termdeck").join("state.json"),
             art: config.join("termdeck").join("art.txt"),
+            config: config.join("termdeck").join("config.json"),
+            termux_colors: None,
         }
     }
+}
+
+/// `colorN=#rrggbb` entries of a Termux `colors.properties`, indexed by N (0–15).
+pub fn parse_palette(text: &str) -> [Option<(u8, u8, u8)>; 16] {
+    let mut out = [None; 16];
+    for line in text.lines() {
+        let Some((key, val)) = line.split_once('=') else { continue };
+        let Some(n) = key.trim().strip_prefix("color").and_then(|n| n.parse::<usize>().ok()) else { continue };
+        let hex = val.trim().trim_start_matches('#');
+        if n < 16 && hex.len() == 6 {
+            if let Ok(v) = u32::from_str_radix(hex, 16) {
+                out[n] = Some(((v >> 16) as u8, (v >> 8) as u8, v as u8));
+            }
+        }
+    }
+    out
 }
 
 /// Write via temp file + rename so an interrupted write cannot corrupt the file.
@@ -73,6 +124,15 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_palette() {
+        let p = parse_palette("background=#000000\ncolor1=#957A71\n color12 = #8875a8\ncolor99=#ffffff\ncolor3=bad");
+        assert_eq!(p[1], Some((0x95, 0x7a, 0x71)));
+        assert_eq!(p[12], Some((0x88, 0x75, 0xa8)));
+        assert_eq!(p[3], None);
+        assert_eq!(p[0], None);
+    }
 
     #[test]
     fn roundtrip() {
