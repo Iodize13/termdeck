@@ -151,10 +151,15 @@ impl App {
         !self.note_mode && !self.query.is_empty()
     }
 
+    /// Switch the prompt between search and note. Typed text carries over either way, so a search
+    /// can be turned into a note; leaving an edit drops the note's text instead.
     pub fn toggle_note_mode(&mut self) {
+        if self.editing.is_some() {
+            self.cancel_note();
+            return;
+        }
         self.note_mode = !self.note_mode;
-        self.editing = None;
-        self.clear_query();
+        self.reset_view();
     }
 
     /// Leave note/edit mode, dropping the prompt text.
@@ -653,6 +658,21 @@ mod tests {
         assert_eq!(app.notes.len(), 2, "first tap only arms");
         app.delete_note(1);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "- 2026-10-11 10:00 the first\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_toggle_keeps_typed_text() {
+        let dir = std::env::temp_dir().join(format!("termdeck-app-toggle-{}", std::process::id()));
+        let mut app = App::new(Paths::in_dirs(&dir.join("c"), &dir.join("d"), &dir.join("e")));
+        for c in "buy milk".chars() {
+            app.type_char(c);
+        }
+        app.toggle_note_mode();
+        assert!(app.note_mode && !app.searching());
+        assert_eq!((app.query.as_str(), app.cursor), ("buy milk", 8));
+        app.toggle_note_mode();
+        assert!(app.searching());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
