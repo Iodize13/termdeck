@@ -2,7 +2,7 @@
 # build -> scp to phone -> restart in tmux session `termdeck`
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PHONE="${TERMDECK_PHONE:--p 8022 u0_a339@192.168.95.171}"
+PHONE="${TERMDECK_PHONE:?set TERMDECK_PHONE, e.g. '-p 8022 u0_a123@192.168.1.50'}"
 TARGET=aarch64-unknown-linux-musl
 BIN=target/$TARGET/release/termdeck
 

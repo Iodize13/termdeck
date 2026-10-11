@@ -22,9 +22,14 @@ is set as the default launcher with Termux as its target, so pressing Home bring
 ## Install (on the phone)
 
 ```sh
-pkg install aapt termux-am-socket tmux   # tmux only for the dev loop
-mkdir -p ~/bin && cp termdeck ~/bin/     # binary built below
+pkg install aapt termux-am-socket
+mkdir -p ~/bin
+curl -L https://github.com/Iodize13/termdeck/releases/latest/download/termdeck-aarch64 -o ~/bin/termdeck
+chmod +x ~/bin/termdeck
+termdeck
 ```
+
+Or build it on the phone: `pkg install rust && cargo install --git https://github.com/Iodize13/termdeck`.
 
 Grant Termux **Settings > Apps > Termux > Display over other apps**, otherwise launches fail with a hint in the status line.
 Use a [Nerd Font](https://www.nerdfonts.com/) as `~/.termux/font.ttf` for icons, stars and slanted button edges.
@@ -38,15 +43,18 @@ cargo zigbuild --release --target aarch64-unknown-linux-musl
 # -> target/aarch64-unknown-linux-musl/release/termdeck (static)
 ```
 
+Releases: push a `v*` tag and `.github/workflows/release.yml` attaches `termdeck-aarch64`.
+
 ## Dev loop
 
-`scripts/dev.sh` builds, copies the binary to the phone and restarts it in tmux session `termdeck`.
-Phone address comes from `TERMDECK_PHONE` (default `-p 8022 u0_a339@192.168.95.171`).
+`scripts/dev.sh` builds, copies the binary to the phone and restarts it in tmux session `termdeck`
+(needs `pkg install tmux openssh` on the phone). Phone address comes from `TERMDECK_PHONE`.
 
 ```sh
+export TERMDECK_PHONE="-p 8022 u0_a123@192.168.1.50"   # `whoami` and `ip addr` on the phone
 scripts/dev.sh
-ssh -p 8022 u0_a339@192.168.95.171 tmux capture-pane -p -t termdeck
-ssh -p 8022 u0_a339@192.168.95.171 tmux send-keys -t termdeck -l yt
+ssh -p 8022 u0_a123@192.168.1.50 tmux capture-pane -p -t termdeck
+ssh -p 8022 u0_a123@192.168.1.50 tmux send-keys -t termdeck -l yt
 ```
 
 ## Controls
@@ -102,3 +110,7 @@ State: `~/.cache/termdeck/index.json`, `~/.local/share/termdeck/state.json` (hon
   plain shell freezes the same way (input is still processed, only the view doesn't redraw). Seen on
   Termux 0.118.0 with `background-image` in `termux.properties`. Switch to another app and back to
   recover; no need to restart Termux.
+
+## License
+
+GPL-2.0-or-later. See [LICENSE](LICENSE).

@@ -2,6 +2,8 @@
 name = "termdeck"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/Iodize13/termdeck"
 
 [dependencies]
 crossterm = "0.29.0"
