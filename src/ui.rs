@@ -177,11 +177,20 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
         settings_row(f, app, Rect { y: y + 1, height: ROW_H, ..area }, cells);
         y += 1 + ROW_H + 1;
     }
-    let note = format!("Saved to {}", app.paths.config.display());
+    let note = format!("Saved to {}", tilde(&app.paths.config));
     f.render_widget(
         Paragraph::new(note).style(Style::default().fg(MUTED)).wrap(ratatui::widgets::Wrap { trim: true }),
         Rect { y, height: (area.y + area.height).saturating_sub(y), ..area },
     );
+}
+
+/// `path` with the home directory shown as `~`.
+fn tilde(path: &std::path::Path) -> String {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    match home.as_deref().and_then(|h| path.strip_prefix(h).ok()) {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    }
 }
 
 // Short option labels so they fit narrow screens.

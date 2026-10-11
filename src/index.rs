@@ -1,4 +1,4 @@
-use crate::parse::{label_fallback, parse_badging_label, parse_pm_path, parse_query_activities};
+use crate::parse::{clean_label, label_fallback, parse_badging_label, parse_pm_path, parse_query_activities};
 use crate::run::{run_capture, run_stdout};
 use crate::store::{AppEntry, Paths, write_atomic};
 use std::collections::HashMap;
@@ -42,7 +42,8 @@ pub fn build_index(old: &[AppEntry]) -> BuildResult {
                 let apk = run_stdout("pm", &["path", pkg]).ok().and_then(|o| parse_pm_path(&o));
                 let mtime = apk.as_deref().map(apk_mtime).unwrap_or(0);
                 let label = match old.get(pkg.as_str()) {
-                    Some(o) if mtime != 0 && o.apk_mtime == mtime => o.label.clone(),
+                    // Cleaned again so labels cached before escapes were handled get fixed too.
+                    Some(o) if mtime != 0 && o.apk_mtime == mtime => clean_label(&o.label),
                     _ => apk.as_deref().and_then(read_label).unwrap_or_else(|| label_fallback(pkg)),
                 };
                 results.lock().unwrap().push(AppEntry {

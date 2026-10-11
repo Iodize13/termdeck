@@ -34,9 +34,30 @@ pub fn parse_badging_label(out: &str) -> Option<String> {
     out.lines().find_map(|l| {
         let rest = l.strip_prefix("application-label:'")?;
         let end = rest.rfind('\'')?;
-        let label = rest[..end].trim();
-        (!label.is_empty()).then(|| label.to_string())
+        let label = clean_label(&rest[..end]);
+        (!label.is_empty()).then_some(label)
     })
+}
+
+/// Undo aapt's escapes (`\n`, `\t`, `\'`, `\"`, `\\`) and fold whitespace runs into one space,
+/// so multi-line app names fit a single row.
+pub fn clean_label(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some('n' | 't' | 'r')) => {
+                chars.next();
+                out.push(' ');
+            }
+            ('\\', Some(e @ ('\'' | '"' | '\\'))) => {
+                chars.next();
+                out.push(e);
+            }
+            _ => out.push(c),
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Last dot-separated segment of the package name.
@@ -113,6 +134,14 @@ mod tests {
     fn badging_label() {
         assert_eq!(parse_badging_label(&fx("badging-chrome.txt")).as_deref(), Some("Chrome"));
         assert_eq!(parse_badging_label("garbage"), None);
+        assert_eq!(parse_badging_label("application-label:'Memory\\nHint'").as_deref(), Some("Memory Hint"));
+    }
+
+    #[test]
+    fn cleans_label_escapes() {
+        assert_eq!(clean_label("Memory\\nHint"), "Memory Hint");
+        assert_eq!(clean_label(" A\\t\\n B "), "A B");
+        assert_eq!(clean_label("Rock \\'n\\' Roll \\\\ x"), "Rock 'n' Roll \\ x");
     }
 
     #[test]
