@@ -50,8 +50,8 @@ pub struct Config {
     pub pinned_style: ButtonStyle,
     /// Recent and search-result rows.
     pub list_style: ButtonStyle,
-    /// Shape of all app buttons.
-    pub shape: ButtonShape,
+    pub pinned_shape: ButtonShape,
+    pub list_shape: ButtonShape,
     /// Show Nerd Font app icons.
     pub icons: bool,
 }
@@ -62,7 +62,8 @@ impl Default for Config {
             home_rows: 3,
             pinned_style: ButtonStyle::Outline,
             list_style: ButtonStyle::Filled,
-            shape: ButtonShape::Parallelogram,
+            pinned_shape: ButtonShape::Parallelogram,
+            list_shape: ButtonShape::Parallelogram,
             icons: true,
         }
     }

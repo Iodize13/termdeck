@@ -45,7 +45,8 @@ pub enum Action {
     AdjustHomeRows(i16),
     SetPinnedStyle(ButtonStyle),
     SetListStyle(ButtonStyle),
-    SetShape(ButtonShape),
+    SetPinnedShape(ButtonShape),
+    SetListShape(ButtonShape),
     SetIcons(bool),
 }
 
@@ -286,8 +287,12 @@ impl App {
                 self.config.list_style = s;
                 self.save_config();
             }
-            Some(Action::SetShape(s)) => {
-                self.config.shape = s;
+            Some(Action::SetPinnedShape(s)) => {
+                self.config.pinned_shape = s;
+                self.save_config();
+            }
+            Some(Action::SetListShape(s)) => {
+                self.config.list_shape = s;
                 self.save_config();
             }
             Some(Action::SetIcons(on)) => {

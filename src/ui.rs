@@ -147,18 +147,21 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
             .map(|s| (style_name(s).to_string(), Some(set(s)), s == cur))
             .collect::<Vec<_>>()
     };
-    let shape_cells = [ButtonShape::Rectangle, ButtonShape::Parallelogram]
-        .into_iter()
-        .map(|s| (shape_name(s).to_string(), Some(Action::SetShape(s)), s == app.config.shape))
-        .collect();
+    let shape_cells = |cur: ButtonShape, set: fn(ButtonShape) -> Action| {
+        [ButtonShape::Rectangle, ButtonShape::Parallelogram]
+            .into_iter()
+            .map(|s| (shape_name(s).to_string(), Some(set(s)), s == cur))
+            .collect::<Vec<_>>()
+    };
     let icon_cells = [(false, "Off"), (true, "On")]
         .into_iter()
         .map(|(on, t)| (t.to_string(), Some(Action::SetIcons(on)), on == app.config.icons))
         .collect();
     let sections = [
         ("Home rows", row_cells),
-        ("Shape", shape_cells),
+        ("Pinned shape", shape_cells(app.config.pinned_shape, Action::SetPinnedShape)),
         ("Pinned style", style_cells(app.config.pinned_style, Action::SetPinnedStyle)),
+        ("List shape", shape_cells(app.config.list_shape, Action::SetListShape)),
         ("List style", style_cells(app.config.list_style, Action::SetListStyle)),
         ("Icons", icon_cells),
     ];
@@ -294,7 +297,7 @@ fn draw_grid(f: &mut Frame, app: &mut App, area: Rect, pinned: &[AppEntry]) -> u
             (false, ButtonStyle::Outline) => BORDER,
             (false, ButtonStyle::Filled) => FILLS[i % FILLS.len()],
         };
-        let inner = button(f, rect, app.config.shape, style, color);
+        let inner = button(f, rect, app.config.pinned_shape, style, color);
         let text = content_style(app, style, color, sel.then_some(ACCENT));
         // Bold only off a fill: some terminals render bold as the bright color, which on a fill
         // would no longer match the computed readable color.
@@ -547,7 +550,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry], base:
 
         let color = if sel { ACCENT } else { FILLS[idx % FILLS.len()] };
         let style = app.config.list_style;
-        let inner = button(f, rect, app.config.shape, style, color);
+        let inner = button(f, rect, app.config.list_shape, style, color);
         // Icon and label share one color (no bold: it can render as the bright variant).
         let solid = content_style(app, style, color, Some(color));
         // Pin toggle on the right end of the bar; the whole height is the tap target.
