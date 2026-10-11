@@ -1,5 +1,6 @@
 mod app;
 mod index;
+mod notes;
 mod parse;
 mod run;
 mod icons;
@@ -40,10 +41,13 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
                     KeyCode::Char('c') if ctrl => app.should_quit = true,
                     KeyCode::Char('p') if ctrl => app.toggle_pin_selected(),
                     KeyCode::Char('r') if ctrl => app.refresh(),
+                    KeyCode::Char('n') if ctrl && !settings => app.toggle_note_mode(),
                     KeyCode::Tab => app.cycle_page(1),
                     KeyCode::BackTab => app.cycle_page(-1),
                     KeyCode::Esc => {
-                        if app.searching() {
+                        if app.note_mode {
+                            app.cancel_note();
+                        } else if app.searching() {
                             app.clear_query();
                         } else if settings {
                             app.goto(Page::Apps);
@@ -57,6 +61,15 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
                     KeyCode::Char('+' | '=') | KeyCode::Right | KeyCode::Up if settings => app.adjust_home_rows(1),
                     KeyCode::Char('-') | KeyCode::Left | KeyCode::Down if settings => app.adjust_home_rows(-1),
                     _ if settings => {}
+                    KeyCode::Enter if app.note_mode => app.save_note(),
+                    KeyCode::Backspace if app.note_mode && app.query.is_empty() => app.note_mode = false,
+                    // With text in the prompt, Left/Right move the cursor instead of the selection.
+                    KeyCode::Left if !app.query.is_empty() => app.move_cursor(-1),
+                    KeyCode::Right if !app.query.is_empty() => app.move_cursor(1),
+                    KeyCode::Home if !app.query.is_empty() => app.move_cursor(isize::MIN / 2),
+                    KeyCode::End if !app.query.is_empty() => app.move_cursor(isize::MAX / 2),
+                    KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right if app.note_mode => {}
+                    KeyCode::Enter if app.page == Page::Notes && !app.searching() => app.edit_selected_note(),
                     KeyCode::Enter => app.launch_selected(),
                     KeyCode::Backspace => app.backspace(),
                     KeyCode::Up | KeyCode::Left => app.move_selection(-1),

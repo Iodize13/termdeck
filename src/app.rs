@@ -1,6 +1,7 @@
 use crate::index::{IndexEvent, build_index, spawn_refresh};
 use crate::parse::{LaunchResult, classify_launch, socket_unavailable};
 use crate::run::run_capture;
+use crate::notes::{self, EditError, Note};
 use crate::store::{AppEntry, ButtonShape, ButtonStyle, Config, Paths, State, parse_palette, read_json, write_atomic};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Utf32Str};
@@ -20,18 +21,20 @@ pub const OVERLAY_MSG: &str =
 pub enum Page {
     Home,
     Apps,
+    Notes,
     /// Opened from the Apps page; not a tab.
     Settings,
 }
 
 impl Page {
     /// Pages in the tab bar, in order.
-    pub const ALL: [Page; 2] = [Page::Home, Page::Apps];
+    pub const ALL: [Page; 3] = [Page::Home, Page::Apps, Page::Notes];
 
     pub fn title(self) -> &'static str {
         match self {
             Page::Home => "Home",
             Page::Apps => "Apps",
+            Page::Notes => "Notes",
             Page::Settings => "Settings",
         }
     }
@@ -48,6 +51,14 @@ pub enum Action {
     SetPinnedShape(ButtonShape),
     SetListShape(ButtonShape),
     SetIcons(bool),
+    ToggleNote,
+    /// Load the note at this file line into the prompt for editing.
+    EditNote(usize),
+    /// First tap arms, second tap on the same note deletes.
+    DeleteNote(usize),
+    /// Tap in the prompt text: the column where the visible text starts, and the char index shown
+    /// there (the text scrolls when longer than the box).
+    PromptAt(u16, usize),
 }
 
 pub struct App {
@@ -64,6 +75,16 @@ pub struct App {
     /// Drives the Home animation.
     pub started: Instant,
     pub config: Config,
+    /// The prompt writes a note instead of searching.
+    pub note_mode: bool,
+    /// The note being edited in the prompt (note mode is on too).
+    pub editing: Option<Note>,
+    /// Notes page contents, newest first.
+    pub notes: Vec<Note>,
+    /// File line of the note whose delete button was tapped once.
+    pub confirm_delete: Option<usize>,
+    /// Cursor position in `query`, in chars.
+    pub cursor: usize,
     last_switch: Option<Instant>,
     pub query: String,
     pub selected: usize,
@@ -104,6 +125,11 @@ impl App {
             started: Instant::now(),
             palette,
             config,
+            note_mode: false,
+            editing: None,
+            notes: Vec::new(),
+            confirm_delete: None,
+            cursor: 0,
             last_switch: None,
             query: String::new(),
             selected: 0,
@@ -122,7 +148,106 @@ impl App {
     }
 
     pub fn searching(&self) -> bool {
-        !self.query.is_empty()
+        !self.note_mode && !self.query.is_empty()
+    }
+
+    pub fn toggle_note_mode(&mut self) {
+        self.note_mode = !self.note_mode;
+        self.editing = None;
+        self.clear_query();
+    }
+
+    /// Leave note/edit mode, dropping the prompt text.
+    pub fn cancel_note(&mut self) {
+        self.note_mode = false;
+        self.editing = None;
+        self.clear_query();
+    }
+
+    fn notes_path(&self) -> std::path::PathBuf {
+        notes::expand(&self.config.notes_path)
+    }
+
+    pub fn reload_notes(&mut self) {
+        match notes::load(&self.notes_path()) {
+            Ok(mut n) => {
+                n.reverse();
+                self.notes = n;
+            }
+            Err(e) => self.status = format!("Cannot read notes: {e}"),
+        }
+        self.selected = self.selected.min(self.notes.len().saturating_sub(1));
+    }
+
+    pub fn edit_note(&mut self, line: usize) {
+        let Some(note) = self.notes.iter().find(|n| n.line == line).cloned() else { return };
+        self.confirm_delete = None;
+        self.note_mode = true;
+        self.query = note.text.clone();
+        self.cursor = self.query.chars().count();
+        self.editing = Some(note);
+    }
+
+    pub fn edit_selected_note(&mut self) {
+        if let Some(line) = self.notes.get(self.selected).map(|n| n.line) {
+            self.edit_note(line);
+        }
+    }
+
+    pub fn delete_note(&mut self, line: usize) {
+        if self.confirm_delete != Some(line) {
+            self.confirm_delete = Some(line);
+            self.status = "Tap again to delete".into();
+            return;
+        }
+        self.confirm_delete = None;
+        let Some(note) = self.notes.iter().find(|n| n.line == line).cloned() else { return };
+        self.status = match notes::edit(&self.notes_path(), &note, None) {
+            Ok(()) => "Note deleted".into(),
+            Err(e) => edit_error(e),
+        };
+        if self.editing.as_ref().is_some_and(|n| n.line == line) {
+            self.cancel_note();
+        }
+        self.reload_notes();
+    }
+
+    pub fn save_note(&mut self) {
+        let text = self.query.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let path = self.notes_path();
+        if let Some(note) = self.editing.clone() {
+            match notes::edit(&path, &note, Some(&text)) {
+                Ok(()) => {
+                    self.status = "Note saved".into();
+                    self.cancel_note();
+                }
+                // Keep the edited text in the prompt; the list shows the file as it is now.
+                Err(e) => {
+                    self.status = edit_error(e);
+                    self.editing = None;
+                }
+            }
+            self.reload_notes();
+            return;
+        }
+        match notes::append(&path, &text) {
+            Ok(()) => {
+                let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                self.status = format!("Noted to {name}");
+                self.cancel_note();
+                if self.page == Page::Notes {
+                    self.reload_notes();
+                }
+            }
+            // The text stays in the prompt so it isn't lost.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.status = "Notes folder missing: run termux-setup-storage".into()
+            }
+            Err(e) => self.status = format!("Cannot save note: {e}"),
+        }
     }
 
     pub fn find(&self, pkg: &str) -> Option<&AppEntry> {
@@ -134,7 +259,7 @@ impl App {
         match self.page {
             Page::Home => &self.state.pinned,
             Page::Apps => &self.state.pinned_apps,
-            Page::Settings => &[],
+            Page::Notes | Page::Settings => &[],
         }
     }
 
@@ -142,7 +267,7 @@ impl App {
         match self.page {
             Page::Home => Some(&mut self.state.pinned),
             Page::Apps => Some(&mut self.state.pinned_apps),
-            Page::Settings => None,
+            Page::Notes | Page::Settings => None,
         }
     }
 
@@ -193,18 +318,36 @@ impl App {
 
     // ---- input ----
 
+    /// Byte offset of char position `pos` in `query`.
+    fn byte_at(&self, pos: usize) -> usize {
+        self.query.char_indices().nth(pos).map_or(self.query.len(), |(i, _)| i)
+    }
+
     pub fn type_char(&mut self, c: char) {
-        self.query.push(c);
+        let at = self.byte_at(self.cursor);
+        self.query.insert(at, c);
+        self.cursor += 1;
         self.reset_view();
     }
 
     pub fn backspace(&mut self) {
-        self.query.pop();
+        if self.cursor == 0 {
+            return;
+        }
+        self.cursor -= 1;
+        let at = self.byte_at(self.cursor);
+        self.query.remove(at);
         self.reset_view();
+    }
+
+    pub fn move_cursor(&mut self, delta: isize) {
+        let n = self.query.chars().count() as isize;
+        self.cursor = (self.cursor as isize + delta).clamp(0, n) as usize;
     }
 
     pub fn clear_query(&mut self) {
         self.query.clear();
+        self.cursor = 0;
         self.reset_view();
     }
 
@@ -218,7 +361,11 @@ impl App {
         if self.page != page {
             self.page = page;
             self.grid_cap = usize::MAX;
+            self.confirm_delete = None;
             self.reset_view();
+            if page == Page::Notes {
+                self.reload_notes();
+            }
         }
     }
 
@@ -251,8 +398,13 @@ impl App {
         self.scroll_by(delta);
     }
 
+    /// Rows the selection and scrolling move over on the current view.
+    fn selectable(&self) -> usize {
+        if self.page == Page::Notes && !self.searching() { self.notes.len() } else { self.items().len() }
+    }
+
     pub fn move_selection(&mut self, delta: isize) {
-        let n = self.items().len();
+        let n = self.selectable();
         if n == 0 {
             return;
         }
@@ -261,7 +413,7 @@ impl App {
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
-        let n = self.items().len();
+        let n = self.selectable();
         let max = n.saturating_sub(self.visible_rows.max(1));
         self.scroll = (self.scroll as isize + delta).clamp(0, max as isize) as usize;
         self.follow_selection = false;
@@ -274,7 +426,16 @@ impl App {
             .rev()
             .find(|(r, _)| col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height)
             .map(|(_, a)| a.clone());
+        if !matches!(hit, Some(Action::DeleteNote(_))) {
+            self.confirm_delete = None;
+        }
         match hit {
+            Some(Action::EditNote(line)) => self.edit_note(line),
+            Some(Action::DeleteNote(line)) => self.delete_note(line),
+            Some(Action::PromptAt(x0, start)) => {
+                let n = self.query.chars().count();
+                self.cursor = (start + col.saturating_sub(x0) as usize).min(n);
+            }
             Some(Action::Launch(pkg)) => self.launch(&pkg),
             Some(Action::TogglePin(pkg)) => self.toggle_pin(&pkg),
             Some(Action::Goto(page)) => self.goto(page),
@@ -295,6 +456,7 @@ impl App {
                 self.config.list_shape = s;
                 self.save_config();
             }
+            Some(Action::ToggleNote) => self.toggle_note_mode(),
             Some(Action::SetIcons(on)) => {
                 self.config.icons = on;
                 self.save_config();
@@ -418,6 +580,13 @@ impl App {
     }
 }
 
+fn edit_error(e: EditError) -> String {
+    match e {
+        EditError::Changed => "Note changed elsewhere; reloaded".into(),
+        EditError::Io(e) => format!("Cannot save note: {e}"),
+    }
+}
+
 /// Fuzzy match `query` against label and package; best score wins, ties by label.
 pub fn search<'a>(entries: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry> {
     let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
@@ -455,6 +624,35 @@ mod tests {
         app.last_switch = None;
         app.wheel(-1);
         assert_eq!(app.page, Page::Home);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn notes_edit_and_double_tap_delete() {
+        let dir = std::env::temp_dir().join(format!("termdeck-app-notes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("n.md");
+        std::fs::write(&file, "- 2026-10-11 10:00 first\n- 2026-10-11 11:00 second\n").unwrap();
+        let mut app = App::new(Paths::in_dirs(&dir.join("c"), &dir.join("d"), &dir.join("e")));
+        app.config.notes_path = file.to_string_lossy().into_owned();
+        app.goto(Page::Notes);
+        assert_eq!(app.notes[0].text, "second"); // newest first
+
+        app.edit_note(0);
+        assert_eq!((app.query.as_str(), app.cursor), ("first", 5));
+        app.move_cursor(-5);
+        for c in "the ".chars() {
+            app.type_char(c);
+        }
+        app.save_note();
+        assert!(app.editing.is_none() && !app.note_mode);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "- 2026-10-11 10:00 the first\n- 2026-10-11 11:00 second\n");
+
+        app.delete_note(1);
+        assert_eq!(app.notes.len(), 2, "first tap only arms");
+        app.delete_note(1);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "- 2026-10-11 10:00 the first\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

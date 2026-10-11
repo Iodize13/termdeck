@@ -24,6 +24,11 @@ const STAR_OFF: &str = "\u{f006}";
 const SLASH: &str = "\u{e0bb}";
 const LOWER_RIGHT: &str = "\u{e0ba}";
 const UPPER_LEFT: &str = "\u{e0bc}";
+// nf-fa-pencil
+const PENCIL: &str = "\u{f040}";
+// nf-fa-trash, nf-fa-question
+const TRASH: &str = "\u{f1f8}";
+const QUESTION: &str = "\u{f128}";
 const GEAR: &str = "\u{f013}";
 const WARN: &str = "\u{f071}";
 
@@ -81,6 +86,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_settings(f, app, content);
     } else if app.searching() {
         draw_search(f, app, content, &items);
+    } else if app.page == Page::Notes {
+        draw_notes(f, app, content);
     } else {
         draw_page(f, app, content, &items);
     }
@@ -97,7 +104,7 @@ fn grid_max_rows(app: &App, height: u16) -> u16 {
         Page::Home => fit.min(app.config.home_rows),
         // Leave the Recent heading (with its spacing) and one list row.
         Page::Apps => (height.saturating_sub(ROW_H + 3) / GRID_PITCH).max(1).min(fit),
-        Page::Settings => 0,
+        Page::Notes | Page::Settings => 0,
     }
 }
 
@@ -253,7 +260,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry]) {
                 None => draw_katana(f, rest, app.started.elapsed().as_secs_f32()),
             }
         }
-        Page::Settings => {}
+        Page::Notes | Page::Settings => {}
         Page::Apps => {
             let recent = &items[pinned_n..];
             if rest.height < 2 || recent.is_empty() {
@@ -589,31 +596,136 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, items: &[AppEntry], base:
     }
 }
 
-fn draw_prompt(f: &mut Frame, app: &App, area: Rect) {
+fn draw_prompt(f: &mut Frame, app: &mut App, area: Rect) {
+    // A separate "Note" button box right of the prompt (not on Settings, which has no input).
+    const BTN_W: u16 = 9;
+    let show_btn = app.page != Page::Settings && area.width >= 24;
+    let prompt = if show_btn { Rect { width: area.width - BTN_W - 1, ..area } } else { area };
+    if show_btn {
+        let btn = Rect { x: area.x + area.width - BTN_W, width: BTN_W, ..area };
+        let label = format!("{PENCIL} Note");
+        // Filled while note mode is on, so the state is obvious.
+        let inner = if app.note_mode {
+            f.render_widget(Block::default().style(Style::default().bg(ACCENT)), btn);
+            Rect { y: btn.y + 1, height: 1, ..btn }
+        } else {
+            boxed(f, btn, Line::default(), false, Alignment::Center)
+        };
+        let style = if app.note_mode {
+            Style::default().bg(ACCENT).fg(text_on(&app.palette, ACCENT)).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        };
+        f.render_widget(Paragraph::new(label).style(style).alignment(Alignment::Center), inner);
+        app.hits.push((btn, Action::ToggleNote));
+    }
+
+    let color = if app.note_mode { ACCENT } else { BORDER };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(BORDER));
-    let line = if app.query.is_empty() {
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(ACCENT)),
-            Span::styled("type to search…", Style::default().fg(MUTED)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(ACCENT)),
-            Span::raw(app.query.clone()),
-            Span::styled("▌", Style::default().fg(ACCENT)),
-        ])
+        .border_style(Style::default().fg(color));
+    let (mark, hint) = match (&app.editing, app.note_mode) {
+        (Some(_), _) => (format!("{PENCIL} "), "editing, Enter to save"),
+        (None, true) => (format!("{PENCIL} "), "write a note, Enter to save"),
+        (None, false) => ("> ".to_string(), "type to search…"),
     };
-    f.render_widget(Paragraph::new(line).block(block), area);
+    let inner = block.inner(prompt);
+    f.render_widget(block, prompt);
+    let mark_w = mark.chars().count() as u16;
+    let mut spans = vec![Span::styled(mark, Style::default().fg(ACCENT))];
+    if app.query.is_empty() {
+        spans.push(Span::styled(hint, Style::default().fg(MUTED)));
+        f.render_widget(Paragraph::new(Line::from(spans)), inner);
+        return;
+    }
+    // Scroll the text so the cursor stays visible; the cursor cell is shown reversed.
+    let chars: Vec<char> = app.query.chars().collect();
+    let room = inner.width.saturating_sub(mark_w).max(1) as usize;
+    let start = (app.cursor + 1).saturating_sub(room);
+    let shown: String = chars.iter().skip(start).take(room).collect();
+    let at = app.cursor - start;
+    let before: String = shown.chars().take(at).collect();
+    let cur: String = shown.chars().nth(at).map_or(" ".into(), |c| c.to_string());
+    let after: String = shown.chars().skip(at + 1).collect();
+    spans.push(Span::raw(before));
+    spans.push(Span::styled(cur, Style::default().fg(ACCENT).add_modifier(Modifier::REVERSED)));
+    spans.push(Span::raw(after));
+    f.render_widget(Paragraph::new(Line::from(spans)), inner);
+    let text_x = inner.x + mark_w;
+    app.hits.push((Rect { x: text_x, width: inner.width.saturating_sub(mark_w), ..inner }, Action::PromptAt(text_x, start)));
+}
+
+/// Notes, newest first, as list rows: time and text, a delete button on the right (tap twice).
+fn draw_notes(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.notes.is_empty() {
+        app.visible_rows = 0;
+        f.render_widget(
+            Paragraph::new(format!("No notes yet.\nTap {PENCIL} Note to write one."))
+                .style(Style::default().fg(Color::Gray))
+                .alignment(Alignment::Center),
+            Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area },
+        );
+        return;
+    }
+    let area = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
+    let visible = (area.height / GRID_PITCH).max(1) as usize;
+    app.visible_rows = visible;
+    let max_scroll = app.notes.len().saturating_sub(visible);
+    app.scroll = app.scroll.min(max_scroll);
+    if app.follow_selection {
+        if app.selected < app.scroll {
+            app.scroll = app.selected;
+        } else if app.selected >= app.scroll + visible {
+            app.scroll = app.selected + 1 - visible;
+        }
+    }
+    let notes: Vec<_> = app.notes.iter().skip(app.scroll).take(visible).cloned().collect();
+    for (slot, n) in notes.into_iter().enumerate() {
+        let idx = app.scroll + slot;
+        let rect = Rect { y: area.y + slot as u16 * GRID_PITCH, height: ROW_H, ..area };
+        if rect.y + ROW_H > area.y + area.height {
+            break;
+        }
+        let editing = app.editing.as_ref().is_some_and(|e| e.line == n.line);
+        let arming = app.confirm_delete == Some(n.line);
+        let color = if arming {
+            Color::Red
+        } else if editing || app.selected == idx {
+            ACCENT
+        } else {
+            FILLS[idx % FILLS.len()]
+        };
+        let style = app.config.list_style;
+        let inner = button(f, rect, app.config.list_shape, style, color);
+        let text_style = content_style(app, style, color, Some(color));
+        let del_w = PIN_W.min(inner.width);
+        let del_rect = Rect { x: inner.x + inner.width - del_w, width: rect.x + rect.width - (inner.x + inner.width - del_w), ..rect };
+        let text = Rect { width: inner.width - del_w, ..inner };
+        // "MM-DD HH:MM" is enough on a phone; the year is in the file.
+        let time = n.time.get(5..).unwrap_or("");
+        let mut spans = vec![Span::styled(" ", text_style)];
+        if !time.is_empty() {
+            spans.push(Span::styled(format!("{time}  "), text_style));
+        }
+        let room = (text.width as usize).saturating_sub(time.chars().count() + 3);
+        spans.push(Span::styled(truncate(&n.text, room), text_style));
+        f.render_widget(Paragraph::new(Line::from(spans)).style(text_style), text);
+        let glyph = if arming { QUESTION } else { TRASH };
+        f.render_widget(
+            Paragraph::new(glyph).style(text_style).alignment(Alignment::Center),
+            Rect { x: del_rect.x, width: del_w, ..inner },
+        );
+        app.hits.push((del_rect, Action::DeleteNote(n.line)));
+        app.hits.push((Rect { width: del_rect.x - rect.x, ..rect }, Action::EditNote(n.line)));
+    }
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let text = if app.entries.is_empty() && app.refreshing {
         "Indexing apps…".to_string()
     } else if app.status.is_empty() {
-        "Tab page · ^P pin · ^R refresh · Esc quit".to_string()
+        "Tab page · ^P pin · ^N note · Esc quit".to_string()
     } else {
         app.status.clone()
     };

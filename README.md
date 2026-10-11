@@ -1,12 +1,15 @@
 # termdeck
 
 Touch-friendly app launcher TUI for Termux: pinned apps, recent list, fuzzy search, launch in ~50 ms via `termux-am`.
+Inspired by [T-UI](https://github.com/fandreuz/TUI-ConsoleLauncher), the Linux CLI launcher for Android.
 
 ![termdeck on a phone](docs/demo.gif)
 
 - **Home**: up to N rows of pinned apps over a spinning katana (or your own ASCII art).
 - **Apps**: a second pin list plus recently launched apps, and a Settings button.
 - **Search** from any page; results are the same rows as Recent.
+- **Notes**: tap the pencil (or Ctrl+N) and the prompt appends a line to a markdown file. The Notes
+  tab lists them newest first: tap one to edit it, tap its trash icon twice to delete it.
 - Colors come from the terminal palette, so a [pywal](https://github.com/eylles/pywal16) scheme in
   `~/.termux/colors.properties` themes it (see [termux-config](https://github.com/Iodize13/termux-config)).
 - Nerd Font icons for common apps; buttons are rectangles or parallelograms, outlined or filled.
@@ -51,13 +54,16 @@ ssh -p 8022 u0_a339@192.168.95.171 tmux send-keys -t termdeck -l yt
 | Input | Action |
 | --- | --- |
 | type | search |
-| Up/Down, Left/Right | move selection |
+| Up/Down, Left/Right (empty prompt) | move selection |
 | Enter | launch selection |
 | Tab / Shift+Tab | next / previous page |
 | swipe up on Home / down at top of Apps | switch page |
 | Ctrl+P | pin/unpin selection on the current page |
 | Ctrl+R | refresh app index |
-| Esc | clear query, back to Home, quit |
+| Ctrl+N or the pencil in the prompt | note mode: Enter appends the text to the notes file |
+| Left/Right, Home/End (with text) | move the cursor; tapping the text places it too |
+| Enter on the Notes tab | edit the selected note |
+| Esc | leave note mode, clear query, back to Home, quit |
 | Ctrl+C | quit |
 
 Tap a button to launch, tap the star to pin, tap a tab to switch pages.
@@ -73,9 +79,15 @@ Settings (Apps page, top right) writes `~/.config/termdeck/config.json`:
   "pinned_style": "outline",
   "list_shape": "parallelogram",
   "list_style": "filled",
-  "icons": true
+  "icons": true,
+  "notes_path": "~/storage/shared/Notes/mobile.md"
 }
 ```
+
+Notes are appended as `- YYYY-MM-DD HH:MM text` lines. Edits rewrite only that line (other lines,
+like headings added elsewhere, are kept) and are refused if the line changed since it was loaded. The default path is in shared storage, so
+run `termux-setup-storage` once, then sync the folder to other devices with e.g. Syncthing. Only the
+phone writes this file, so syncing it never conflicts.
 
 `~/.config/termdeck/art.txt`, if present, replaces the katana with static ASCII art.
 

@@ -41,7 +41,7 @@ pub enum ButtonShape {
 }
 
 /// User settings, `config.json` in the config dir.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Grid rows of pinned apps on the Home page.
@@ -54,6 +54,8 @@ pub struct Config {
     pub list_shape: ButtonShape,
     /// Show Nerd Font app icons.
     pub icons: bool,
+    /// Where notes are appended; `~/` is expanded.
+    pub notes_path: String,
 }
 
 impl Default for Config {
@@ -65,6 +67,7 @@ impl Default for Config {
             pinned_shape: ButtonShape::Parallelogram,
             list_shape: ButtonShape::Parallelogram,
             icons: true,
+            notes_path: crate::notes::DEFAULT_PATH.to_string(),
         }
     }
 }
