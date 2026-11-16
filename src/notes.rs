@@ -82,6 +82,13 @@ fn parse(line: usize, raw: &str) -> Option<Note> {
     Some(Note { line, raw: raw.to_string(), time: time.to_string(), text: text.to_string() })
 }
 
+/// Modification time and size of the notes file, to notice writes by sync tools or other editors.
+/// `None` when the file is missing or unreadable.
+pub fn stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
 #[derive(Debug)]
 pub enum EditError {
     /// The line no longer matches what was loaded (changed by sync or another editor).

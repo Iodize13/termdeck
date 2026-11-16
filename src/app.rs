@@ -83,6 +83,8 @@ pub struct App {
     pub notes: Vec<Note>,
     /// File line of the note whose delete button was tapped once.
     pub confirm_delete: Option<usize>,
+    /// Notes file stamp at the last load; a different one means it was written elsewhere.
+    notes_stamp: Option<(std::time::SystemTime, u64)>,
     /// Cursor position in `query`, in chars.
     pub cursor: usize,
     last_switch: Option<Instant>,
@@ -129,6 +131,7 @@ impl App {
             editing: None,
             notes: Vec::new(),
             confirm_delete: None,
+            notes_stamp: None,
             cursor: 0,
             last_switch: None,
             query: String::new(),
@@ -177,7 +180,9 @@ impl App {
     }
 
     pub fn reload_notes(&mut self) {
-        match notes::load(&self.notes_path()) {
+        let path = self.notes_path();
+        self.notes_stamp = notes::stamp(&path);
+        match notes::load(&path) {
             Ok(mut n) => {
                 n.reverse();
                 self.notes = n;
@@ -185,6 +190,17 @@ impl App {
             Err(e) => self.status = format!("Cannot read notes: {e}"),
         }
         self.selected = self.selected.min(self.notes.len().saturating_sub(1));
+    }
+
+    /// On the Notes page, reload when the file changed on disk (sync, another editor). A note
+    /// being edited keeps its prompt text; saving it still refuses if its line changed.
+    pub fn poll_notes(&mut self) {
+        if self.page != Page::Notes || notes::stamp(&self.notes_path()) == self.notes_stamp {
+            return;
+        }
+        // Line numbers may have shifted, so an armed delete could hit another note.
+        self.confirm_delete = None;
+        self.reload_notes();
     }
 
     pub fn edit_note(&mut self, line: usize) {
@@ -658,6 +674,28 @@ mod tests {
         assert_eq!(app.notes.len(), 2, "first tap only arms");
         app.delete_note(1);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "- 2026-10-11 10:00 the first\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn notes_reload_after_external_write() {
+        let dir = std::env::temp_dir().join(format!("termdeck-app-poll-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("n.md");
+        std::fs::write(&file, "- 2026-10-11 10:00 first\n").unwrap();
+        let mut app = App::new(Paths::in_dirs(&dir.join("c"), &dir.join("d"), &dir.join("e")));
+        app.config.notes_path = file.to_string_lossy().into_owned();
+        app.goto(Page::Notes);
+        app.confirm_delete = Some(0);
+        app.poll_notes();
+        assert_eq!((app.notes.len(), app.confirm_delete), (1, Some(0)), "unchanged file: no reload");
+
+        // The size changes too, so this doesn't depend on mtime resolution.
+        std::fs::write(&file, "- 2026-10-11 10:00 first\n- 2026-10-11 11:00 from a peer\n").unwrap();
+        app.poll_notes();
+        assert_eq!(app.notes[0].text, "from a peer");
+        assert_eq!(app.confirm_delete, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

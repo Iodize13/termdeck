@@ -29,6 +29,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
     let mut app = App::new(store::Paths::from_env());
     while !app.should_quit {
         app.poll_index();
+        app.poll_notes();
         terminal.draw(|f| ui::draw(f, &mut app))?;
         if !event::poll(Duration::from_millis(100))? {
             continue;

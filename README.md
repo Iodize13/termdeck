@@ -94,11 +94,15 @@ Settings (Apps page, top right) writes `~/.config/termdeck/config.json`:
 
 Notes are appended as `- YYYY-MM-DD HH:MM text` lines. Edits rewrite only that line (other lines,
 like headings added elsewhere, are kept) and are refused if the line changed since it was loaded.
+The Notes tab reloads when the file changes on disk, so writes from a sync tool or another editor
+show up while it is open.
 
 By default (`"notes_path": ""`) notes go to `~/.local/share/termdeck/notes.md`, private to Termux.
 To sync them to other devices, run `termux-setup-storage` once, set e.g.
-`"notes_path": "~/storage/shared/Notes/mobile.md"`, and share that folder with Syncthing. Only the
-phone writes this file, so syncing it never conflicts.
+`"notes_path": "~/storage/shared/Notes/mobile.md"`, and share that folder with Syncthing. If only the
+phone writes this file, syncing it never conflicts. With several writers (a live-sync tool such as
+Teamtype, or editing the file on another device) an edit or delete in termdeck rewrites the whole
+file, so a change that lands from elsewhere in the same instant can be lost. Appends are safe.
 
 `~/.config/termdeck/art.txt`, if present, replaces the katana with static ASCII art.
 
